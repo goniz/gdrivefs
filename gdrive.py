@@ -71,17 +71,13 @@ class GDriveError(Exception):
 	pass
 
 class GDriveService(object):
-	# Copy your credentials from the console
-	CLIENT_ID = '771150470231.apps.googleusercontent.com'
-	CLIENT_SECRET = 'Ch0XGWBm2wMjVwzX7a2-Ig1z'
-
 	# Check https://developers.google.com/drive/scopes for all available scopes
 	OAUTH_SCOPE = 'https://www.googleapis.com/auth/drive'
 
 	# Redirect URI for installed apps
 	REDIRECT_URI = 'urn:ietf:wg:oauth:2.0:oob'
 
-	def __init__(self, cid = CLIENT_ID, csecret = CLIENT_SECRET):
+	def __init__(self, cid, csecret):
 		self._client_id = cid
 		self._client_secret = csecret
 		self._authorize()
