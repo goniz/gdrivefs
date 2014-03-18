@@ -2,65 +2,108 @@
 
 import httplib2
 import pprint
+import re
+import stat
 
-import apiclient.discovery
-from apiclient import errors
-from oauth2client.client import OAuth2WebServerFlow
+from pydrive.auth import GoogleAuth
+from pydrive.drive import GoogleDrive
+from pydrive.files import GoogleDriveFile
+
+class MIME(object):
+	Folder = 'application/vnd.google-apps.folder'
 
 class File(object):
-	def __init__(self, name, fid):
-		self._name = name
-		self._id = fid
-		self._metadata = None
+	def __init__(self, service, gfile):
+		super(File, self).__init__()
+		self.service = service
+		if isinstance(gfile, str):
+			self.gfile = service.CreateFile({'id': gfile})
+		elif isinstance(gfile, GoogleDriveFile):
+			self.gfile = gfile
+		else:
+			raise ValueError('gfile should be an ID string or a GoogleDriveFile instance!')
 
-	def set_metadata(self, meta):
-		self._metadata = meta
+	def name(self):
+		return self.gfile[u'title']
+
+	def id(self):
+		return self.gfile[u'id']
+
+	def stat(self):
+		ret = {}
+		ret[u'st_mode'] = stat.S_IFREG | 0755
+		ret[u'st_ino'] = 0
+		ret[u'st_dev'] = 0
+		ret[u'st_nlink'] = 2
+		ret[u'st_uid'] = 0
+		ret[u'st_gid'] = 0
+		try:
+			ret[u'st_size'] = int(self.service.CreateFile({'id': self.id()})['fileSize'])
+		except:
+			ret[u'st_size'] = 0
+		ret[u'st_atime'] = 0
+		ret[u'st_mtime'] = 0
+		ret[u'st_ctime'] = 0
+		return ret
+
+	def get(self):
+		return self.gfile.GetContentString()
+
+	def read(self, offset, length):
+		url = self.gfile.get('downloadUrl')
+		if not url or not hasattr(self.gfile.auth.service, '_http'):
+			print('no url, or no _http!')
+			return ''
+		headers = { 'Range': 'bytes=%d-%d' % (offset, offset+length-1) }
+		resp, content = self.gfile.auth.service._http.request(url, headers = headers)
+		if resp.status != 206:
+			print('not 206 OK:', resp.status)
+			return ''
+		return content
 
 	def __str__(self):
-		return u'%s (f): %s' % (self._name, self._id)
+		return u'%s (f): %s' % (self.name(), self.id())
 
-class Folder(object):
-	def __init__(self, name, fid):
-		self._name = name
-		self._id = fid
-		self._folders = []
-		self._files = []
-		self._metadata = None
+	@staticmethod
+	def create_from_id(service, fid):
+		gfile = service.CreateFile({'id': fid})
+		return File(service, gfile)
 
-	def set_metadata(self, meta):
-		self._metadata = meta
+class Folder(File):
+	def __init__(self, service, gfile):
+		super(Folder, self).__init__(service, gfile)
+		query = "'%s' in parents and trashed=false" % (self.id(), )
+		self._tree = self.service.ListFile({'q': query}).GetList()
+		self.folders = list(self._folders())
+		self.files = list(self._files())
 
-	def add_folder(self, folder):
-		f = Folder(folder[u'title'], folder[u'id'])
-		f.set_metadata(folder)
-		self._folders.append(f)
-		return f
+	def _folders(self):
+		for entry in self._tree:
+			if entry[u'mimeType'] == MIME.Folder:
+				yield Folder(self.service, entry)
 
-	def add_folders(self, folders):
-		for folder in folders:
-			self.add_folder(folder)
+	def _files(self):
+		for entry in self._tree:
+			if entry[u'mimeType'] != MIME.Folder:
+				yield File(self.service, entry)
 
-	def add_file(self, f):
-		tmpfile = File(f[u'title'], f[u'id'])
-		tmpfile.set_metadata(f)
-		self._files.append(tmpfile)
-		return tmpfile
+	def find_entry(self, name):
+		f = filter(lambda x: x.name() == name, self.folders + self.files)
+		if not f or len(f) > 1:
+			return None
+		return f[0]
 
-	def add_files(self, files):
-		for f in files:
-			self.add_file(f)
-
-	def folders(self):
-		return self._folders
-
-	def files(self):
-		return self._files
+	def stat(self):
+		ret = super(Folder, self).stat()
+		ret[u'st_mode'] = stat.S_IFDIR | 0755
+		ret[u'st_size'] = 4096
+		return ret
 
 	def __str__(self):
-		root = u'%s (d): %s' % (self._name, self._id)
-		for f in self._files:
+		root = u'%s (d): %s' % (self.name(), self.id())
+		for f in self.files:
 			root += u'\n\t%s' % (unicode(f), )
-		for f in self._folders:
+		for f in self.folders:
 			root += u'\n\t%s' % (unicode(f), )
 		return root
 
@@ -71,87 +114,32 @@ class GDriveError(Exception):
 	pass
 
 class GDriveService(object):
-	# Check https://developers.google.com/drive/scopes for all available scopes
-	OAUTH_SCOPE = 'https://www.googleapis.com/auth/drive'
 
-	# Redirect URI for installed apps
-	REDIRECT_URI = 'urn:ietf:wg:oauth:2.0:oob'
-
-	def __init__(self, cid, csecret):
-		self._client_id = cid
-		self._client_secret = csecret
+	def __init__(self, config):
+		print('Initializing GoogleDrive..')
+		self._config = config
 		self._authorize()
-		self._entires = self._get_entries()
-		self._tree = self._build_tree()
+		self._service = GoogleDrive(self._gauth) 
+		self._tree = Folder(self._service, 'root')
+		print('Done')
 
 	def _authorize(self):
-		# Run through the OAuth flow and retrieve credentials
-		args =(self._client_id, self._client_secret, GDriveService.OAUTH_SCOPE, GDriveService.REDIRECT_URI)
-		flow = OAuth2WebServerFlow(*args)
-		authorize_url = flow.step1_get_authorize_url()
-		print 'Go to the following link in your browser: ' + authorize_url
-		code = raw_input('Enter verification code: ').strip()
-		credentials = flow.step2_exchange(code)
+		print('Authorizing..')
+		self._gauth = GoogleAuth(self._config)
+		self._gauth.LocalWebserverAuth()
+		return self._gauth
 
-		# Create an httplib2.Http object and authorize it with our credentials
-		http = httplib2.Http()
-		self._http = credentials.authorize(http)
-		self._service = apiclient.discovery.build('drive', 'v2', http=self._http)
-		return self._service
-
-	def _get_entries(self):
-		print 'Downloading entries...',
-		result = []
-		page_token = None
-		while True:
-			try:
-				param = {}
-				if page_token:
-					param['pageToken'] = page_token
-				files =  self._service.files().list(**param).execute()
-				result.extend(files['items'])
-				page_token = files.get('nextPageToken')
-				if not page_token:
-					break
-			except errors.HttpError as error:
-				print 'shit', str(error)
-				break
-		ret = filter(lambda x: x['userPermission']['id'] == 'me' and x['userPermission']['role'] == 'owner', result)
-		print 'Done!'
-		return ret
-
-	def _find_root(self):
-		entries = filter(lambda x: x['parents'] and x['parents'][0]['isRoot'], self._entires)
-		if not entries:
-			raise GDriveError('no root!?')
-		tmpid = entries[0]['parents'][0]['id']
-		tmplst = filter(lambda x: x['parents'][0]['id'] == tmpid, entries)
-		assert len(tmplst) == len(entries), 'wtf? should be only one root!'
-		return tmpid
-
-	def _find_children(self, fid):
-		root = filter(lambda x: x['parents'] and x['parents'][0]['id'] == fid, self._entires)
-		folders = filter(lambda x: x['mimeType'] == 'application/vnd.google-apps.folder', root)
-		files = filter(lambda x: x['mimeType'] != 'application/vnd.google-apps.folder', root)
-		return (files, folders)
-
-	def _populate_folder(self, folder):
-		myid = folder._id
-		files, folders = self._find_children(myid)
-		if files:
-			# add files dicts to current folder obj
-			folder.add_files(files)
-		if folders:
-			# add folders dicts to current folder obj
-			folder.add_folders(folders)
-			# populate each new folder with its childern
-			for folder in folder.folders():
-				self._populate_folder(folder)
-
-	def _build_tree(self):
-		print 'Building Filesystem Tree..',
-		root_id = self._find_root()
-		root = Folder('/', root_id)
-		self._populate_folder(root)
-		print 'Done!'
-		return root
+	def resolve_path(self, path):
+		print('Resolving', path, '...')
+		if u'/' == path:
+			print('found root!')
+			return self._tree
+		splitted = filter(None, path.split('/'))
+		cur = self._tree
+		for f in splitted:
+			cur = cur.find_entry(f)
+			if not cur:
+				print('Not found??')
+				return None
+		print('Done!')
+		return cur

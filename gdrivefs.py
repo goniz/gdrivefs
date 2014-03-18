@@ -1,106 +1,133 @@
 #!/usr/bin/python2
 
-from __future__ import with_statement
-
 import os
 import sys
 import errno
-
-from fuse import FUSE, FuseOSError, Operations
-
+import fuse
 import gdrive
 
+CONFIG_DIR = '%s/.gdrivefs' % (os.getenv('HOME'), )
+CONFIG_PATH = '%s/settings.yaml' % (CONFIG_DIR, )
 
-class GDriveFS(Operations):
-	def __init__(self, root):
+class GDriveFS(fuse.Operations):
+	def __init__(self, root, config):
 		self.root = root
-		self.gdrive = gdrive.GDriveService()
+		self.config = config
+		self.gdrive = gdrive.GDriveService(config)
 
 	# Filesystem methods
 	# ==================
 
 	def access(self, path, mode):
-		pass
+		print('access')
+		return 0
 
 	def chmod(self, path, mode):
+		print('chmod')
 		pass
 
 	def chown(self, path, uid, gid):
+		print('chown')
 		pass
 
 	def getattr(self, path, fh=None):
-		pass
+		print('getattr')
+		root = self.gdrive.resolve_path(path)
+		return root.stat()
 
 	def readdir(self, path, fh):
+		print('readdir')
 		dirents = ['.', '..']
-		for f in self.gdrive._tree.folders():
-			dirents.append(f._name)
-		for f in self.gdrive._tree.files():
-			dirents.append(f._name)
+		root = self.gdrive.resolve_path(path)
+		for f in root.folders:
+			dirents.append(f.name())
+		for f in root.files:
+			dirents.append(f.name())
 		for r in dirents:
 			yield r
 
 	def readlink(self, path):
+		print('readlink')
 		pass
 
 	def mknod(self, path, mode, dev):
+		print('mknod')
 		pass
 
 	def rmdir(self, path):
+		print('rmdir')
 		return True
 
 	def mkdir(self, path, mode):
+		print('mkdir')
 		return 0
 
 	def statfs(self, path):
+		print('statfs')
 		pass
 
 	def unlink(self, path):
+		print('unlink')
 		pass
 
 	def symlink(self, target, name):
+		print('symlink')
 		pass
 
 	def rename(self, old, new):
+		print('rename')
 		pass
 
 	def link(self, target, name):
+		print('link')
 		pass
 
 	def utimens(self, path, times=None):
+		print('utimens')
 		pass
 
 	# File methods
 	# ============
 
 	def open(self, path, flags):
-		pass
+		print('open')
+		return 0
 
 	def create(self, path, mode, fi=None):
+		print('create')
 		pass
 
 	def read(self, path, length, offset, fh):
-		pass
+		print('read')
+		root = self.gdrive.resolve_path(path)
+		return root.read(offset, length)
 
 	def write(self, path, buf, offset, fh):
+		print('write')
 		pass
 
 	def truncate(self, path, length, fh=None):
+		print('truncate')
 		pass
 
 	def flush(self, path, fh):
+		print('flush')
 		pass
 
 	def release(self, path, fh):
+		print('release')
 		pass
 
 	def fsync(self, path, fdatasync, fh):
+		print('fsync')
 		pass
 
 def main():
 	image_file, mountpoint = sys.argv
-	FUSE(GDriveFS(mountpoint), mountpoint, foreground=True)
+	fuse.FUSE(GDriveFS(mountpoint, CONFIG_PATH), mountpoint, foreground=True)
+	return 0
 
 if __name__ == '__main__':
-	main()
+	ret = main()
+	sys.exit(ret)
 
