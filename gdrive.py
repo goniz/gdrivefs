@@ -4,10 +4,14 @@ import httplib2
 import pprint
 import re
 import stat
+import socket
 
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 from pydrive.files import GoogleDriveFile
+
+__timeout = 5
+socket.setdefaulttimeout(__timeout)
 
 class MIME(object):
 	Folder = 'application/vnd.google-apps.folder'
@@ -31,16 +35,21 @@ class File(object):
 
 	def stat(self):
 		ret = {}
+		try:
+			if not hasattr(self, '_st_size'):
+				self._st_size = int(self.service.CreateFile({'id': self.id()})['fileSize'])
+		except KeyError:
+			self._st_size = 0
+		except:
+			raise
+
 		ret[u'st_mode'] = stat.S_IFREG | 0755
 		ret[u'st_ino'] = 0
 		ret[u'st_dev'] = 0
 		ret[u'st_nlink'] = 2
 		ret[u'st_uid'] = 0
 		ret[u'st_gid'] = 0
-		try:
-			ret[u'st_size'] = int(self.service.CreateFile({'id': self.id()})['fileSize'])
-		except:
-			ret[u'st_size'] = 0
+		ret[u'st_size'] = self._st_size
 		ret[u'st_atime'] = 0
 		ret[u'st_mtime'] = 0
 		ret[u'st_ctime'] = 0
@@ -52,13 +61,14 @@ class File(object):
 	def read(self, offset, length):
 		url = self.gfile.get('downloadUrl')
 		if not url or not hasattr(self.gfile.auth.service, '_http'):
-			print('no url, or no _http!')
-			return ''
+			raise RuntimeError('no url, or no _http!')
 		headers = { 'Range': 'bytes=%d-%d' % (offset, offset+length-1) }
-		resp, content = self.gfile.auth.service._http.request(url, headers = headers)
-		if resp.status != 206:
-			print('not 206 OK:', resp.status)
-			return ''
+		try:
+			resp, content = self.gfile.auth.service._http.request(url, headers = headers)
+			if resp.status != 206:
+				raise RuntimeError('not 206 OK:', resp.status)
+		except Exception as e:
+			raise RuntimeError('Error while trying to download chunk')
 		return content
 
 	def __str__(self):

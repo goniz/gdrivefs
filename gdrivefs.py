@@ -33,12 +33,16 @@ class GDriveFS(fuse.Operations):
 	def getattr(self, path, fh=None):
 		print('getattr')
 		root = self.gdrive.resolve_path(path)
+		if not root:
+			raise RuntimeError('path not found: %s' % path)
 		return root.stat()
 
 	def readdir(self, path, fh):
 		print('readdir')
 		dirents = ['.', '..']
 		root = self.gdrive.resolve_path(path)
+		if not root:
+			raise RuntimeError('path not found: %s' % path)
 		for f in root.folders:
 			dirents.append(f.name())
 		for f in root.files:
@@ -100,6 +104,8 @@ class GDriveFS(fuse.Operations):
 	def read(self, path, length, offset, fh):
 		print('read')
 		root = self.gdrive.resolve_path(path)
+		if not root:
+			raise RuntimeError('path not found: %s' % path)
 		return root.read(offset, length)
 
 	def write(self, path, buf, offset, fh):
